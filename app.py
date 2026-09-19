@@ -52,13 +52,10 @@ def calculate_stock_score(ticker_symbol):
     try:
         end_date   = datetime.now()
         start_date = end_date - timedelta(days=365)
-
         ticker = yf.Ticker(ticker_symbol)
         df = ticker.history(start=start_date, end=end_date, interval="1h", prepost=True)
-
         if df.empty:
             return 0, 0
-
         df_4h = df.resample('4h').agg({
             'Open':   'first',
             'High':   'max',
@@ -66,27 +63,21 @@ def calculate_stock_score(ticker_symbol):
             'Close':  'last',
             'Volume': 'sum'
         }).dropna()
-
         score    = 0
         in_spike = False
         current_low = df_4h['Low'].iloc[0]
-
         for i in range(len(df_4h)):
             candle_high = df_4h['High'].iloc[i]
             candle_low  = df_4h['Low'].iloc[i]
-
             if candle_low < current_low and not in_spike:
                 current_low = candle_low
-
             gain = (candle_high - current_low) / current_low if current_low > 0 else 0
-
             if gain >= 0.30 and not in_spike:
                 score   += 1
                 in_spike = True
             elif gain < 0.30 and in_spike:
                 in_spike    = False
                 current_low = candle_low
-
         return score, len(df_4h)
     except Exception:
         return 0, 0
@@ -102,9 +93,9 @@ if st.button("Run Scanner", type="primary"):
         score, candles_count = calculate_stock_score(symbol)
         status = "Active" if candles_count > 0 else "Data Unavailable"
         results.append({
-            "Ticker":         symbol,
+            "Ticker":          symbol,
             "30% Spike Score": score,
-            "Status":         status
+            "Status":          status
         })
         progress_bar.progress((idx + 1) / total_tickers)
 
@@ -113,7 +104,6 @@ if st.button("Run Scanner", type="primary"):
     df_results = pd.DataFrame(results)
     df_results = df_results.sort_values(by="30% Spike Score", ascending=False)
 
-    # Build scores dict and push to Gist
     scores_dict = {
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M UTC"),
         "scores": {
