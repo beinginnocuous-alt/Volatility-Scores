@@ -68,19 +68,27 @@ def calculate_stock_score(ticker_symbol):
                 ticker = yf.Ticker(sym)
                 df_temp = ticker.history(start=start_date, end=end_date, interval="1h", prepost=True)
                 if not df_temp.empty:
+                    # Flatten MultiIndex columns if present
                     if isinstance(df_temp.columns, pd.MultiIndex):
                         df_temp.columns = df_temp.columns.get_level_values(0)
-                    frames.append(df_temp)
+                    
+                    # Remove timezone info to allow clean timestamp alignment across ticker changes
+                    if df_temp.index.tz is not None:
+                        df_temp.index = df_temp.index.tz_localize(None)
+                        
+                    frames.append(df_temp[['Open', 'High', 'Low', 'Close', 'Volume']])
             except Exception:
                 continue
                 
         if not frames:
             return 0, 0
 
+        # Merge historical frames from main ticker + aliases
         df = pd.concat(frames)
         df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
 
+        # Resample into 4-hour candles
         df_4h = df.resample('4h').agg({
             'Open':   'first',
             'High':   'max',
@@ -129,6 +137,7 @@ if st.button("Run Scanner", type="primary"):
         results.append({
             "Ticker":          symbol,
             "30% Spike Score": score,
+            "4H Candles":      candles_count,
             "Status":          status
         })
         progress_bar.progress((idx + 1) / total_tickers)
