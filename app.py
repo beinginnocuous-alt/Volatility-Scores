@@ -19,10 +19,17 @@ default_tickers = (
     "HTOO, LGHL, IMTE, DSS, MITQ, CMCT, ICON, PAVS, HCWC, MRM, NCRA, INHD, "
     "ILAG, SKK, JCSE, UPC, BAOS, RPGL, WBUY, HKIT, RDGT, BJDX, KALA, IVDA, "
     "CPOP, SNYR, EDHL, DLXY, CYAB, COSM, AIXC, FCHL, FCUV, OBAI, OTLK, JUNS, "
-    "CENN, NEXR, TOP, YFOR, INLF, RAYA, WETO, LESL, CRIS, SDOT, LGCL, VBIO, "
-    "ONFO, GRML, OMH, JZXN, RITRF, LHAI, YMT, FFAI, OFAL, HLSQ, UCAR, YYAI, "
+    "CENN, NEXR, TOPP, YFOR, INLF, RAYA, WETO, LESL, CRIS, SDOT, LGCL, VBIO, "
+    "ONFO, GRML, OMH, JZXN, LHAI, YMT, FFAI, OFAL, HLSQ, UCAR, YYAI, "
     "APUS, SGRX, OLOX, TNMG, GIPR"
 )
+
+# Ticker Aliases to ensure full 1-year history for renamed stocks
+TICKER_ALIASES = {
+    "SGRX": ["BTOG"],
+    "YFOR": ["YYGF", "YYGH"],
+    "TOPP": ["TOP"]
+}
 
 user_input = st.text_area("Stock Watchlist (comma-separated):", default_tickers, height=150)
 ticker_list = [t.strip().upper() for t in user_input.split(",") if t.strip()]
@@ -52,10 +59,28 @@ def calculate_stock_score(ticker_symbol):
     try:
         end_date   = datetime.now()
         start_date = end_date - timedelta(days=365)
-        ticker = yf.Ticker(ticker_symbol)
-        df = ticker.history(start=start_date, end=end_date, interval="1h", prepost=True)
-        if df.empty:
+        
+        symbols_to_fetch = [ticker_symbol] + TICKER_ALIASES.get(ticker_symbol, [])
+        frames = []
+        
+        for sym in symbols_to_fetch:
+            try:
+                ticker = yf.Ticker(sym)
+                df_temp = ticker.history(start=start_date, end=end_date, interval="1h", prepost=True)
+                if not df_temp.empty:
+                    if isinstance(df_temp.columns, pd.MultiIndex):
+                        df_temp.columns = df_temp.columns.get_level_values(0)
+                    frames.append(df_temp)
+            except Exception:
+                continue
+                
+        if not frames:
             return 0, 0
+
+        df = pd.concat(frames)
+        df = df[~df.index.duplicated(keep="last")]
+        df.sort_index(inplace=True)
+
         df_4h = df.resample('4h').agg({
             'Open':   'first',
             'High':   'max',
@@ -63,21 +88,30 @@ def calculate_stock_score(ticker_symbol):
             'Close':  'last',
             'Volume': 'sum'
         }).dropna()
+
+        if df_4h.empty:
+            return 0, 0
+
         score    = 0
         in_spike = False
         current_low = df_4h['Low'].iloc[0]
+
         for i in range(len(df_4h)):
             candle_high = df_4h['High'].iloc[i]
             candle_low  = df_4h['Low'].iloc[i]
+
             if candle_low < current_low and not in_spike:
                 current_low = candle_low
+
             gain = (candle_high - current_low) / current_low if current_low > 0 else 0
+
             if gain >= 0.30 and not in_spike:
                 score   += 1
                 in_spike = True
             elif gain < 0.30 and in_spike:
                 in_spike    = False
                 current_low = candle_low
+
         return score, len(df_4h)
     except Exception:
         return 0, 0
