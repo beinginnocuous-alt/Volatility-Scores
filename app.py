@@ -21,7 +21,7 @@ default_tickers = (
     "CPOP, SNYR, EDHL, DLXY, CYAB, COSM, AIXC, FCHL, FCUV, OBAI, OTLK, JUNS, "
     "CENN, NEXR, TOPP, YFOR, INLF, RAYA, WETO, LESL, CRIS, SDOT, LGCL, VBIO, "
     "ONFO, GRML, OMH, JZXN, LHAI, YMT, FFAI, OFAL, HLSQ, UCAR, YYAI, "
-    "APUS, SGRX, OLOX, TNMG, GIPR"
+    "APUS, SGRX, OLOX, TNMG, GIPR, CXAI"
 )
 
 # Ticker Aliases to ensure full 1-year history for renamed stocks
