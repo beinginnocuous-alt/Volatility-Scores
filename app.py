@@ -24,7 +24,7 @@ default_tickers = (
     "APUS, SGRX, OLOX, TNMG, GIPR, CXAI, YYGH"
 )
 
-# Bidirectional Ticker Aliases to ensure full 1-year history for renamed stocks
+# Bidirectional Ticker Aliases
 TICKER_ALIASES = {
     "SGRX": ["BTOG"],
     "BTOG": ["SGRX"],
@@ -71,14 +71,37 @@ def calculate_stock_score(ticker_symbol):
                 if not df_temp.empty:
                     if isinstance(df_temp.columns, pd.MultiIndex):
                         df_temp.columns = df_temp.columns.get_level_values(0)
-                    frames.append(df_temp)
+                    frames.append((sym, df_temp))
             except Exception:
                 continue
                 
         if not frames:
             return 0, 0
 
-        df = pd.concat(frames)
+        # Sort frames chronologically based on their data timestamps to normalize price scaling across symbol changes
+        frames.sort(key=lambda x: x[1].index[0])
+        
+        normalized_frames = []
+        last_close_bridge = None
+
+        for sym, df_f in frames:
+            if last_close_bridge is not None and not df_f.empty:
+                # Calculate adjustment ratio at the boundary to align split/scale differences
+                first_price_new = df_f['Close'].iloc[0]
+                if first_price_new > 0:
+                    scaling_factor = last_close_bridge / first_price_new
+                    for col in ['Open', 'High', 'Low', 'Close']:
+                        if col in df_f.columns:
+                            df_f[col] = df_f[col] * scaling_factor
+            
+            if not df_f.empty:
+                last_close_bridge = df_f['Close'].iloc[-1]
+                normalized_frames.append(df_f)
+
+        if not normalized_frames:
+            return 0, 0
+
+        df = pd.concat(normalized_frames)
         df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
 
@@ -130,7 +153,8 @@ if st.button("Run Scanner", type="primary"):
         results.append({
             "Ticker":           symbol,
             "30% Spike Score": score,
-            "Status":           status
+            "Status":           status,
+            "Candles":          candles_count
         })
         progress_bar.progress((idx + 1) / total_tickers)
 
