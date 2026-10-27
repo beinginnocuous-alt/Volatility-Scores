@@ -21,13 +21,12 @@ default_tickers = (
     "CPOP, SNYR, EDHL, DLXY, CYAB, COSM, AIXC, FCHL, FCUV, OBAI, OTLK, JUNS, "
     "CENN, NEXR, TOPP, YFOR, INLF, RAYA, WETO, LESL, CRIS, SDOT, LGCL, VBIO, "
     "ONFO, GRML, OMH, JZXN, LHAI, YMT, FFAI, OFAL, HLSQ, UCAR, YYAI, "
-    "APUS, SGRX, OLOX, TNMG, GIPR, CXAI"
+    "APUS, SGRX, OLOX, TNMG, GIPR, CXAI, YYGH"
 )
 
 # Ticker Aliases to ensure full 1-year history for renamed stocks
 TICKER_ALIASES = {
-    "SGRX": ["BTOG"],
-    "YFOR": ["YYGH"]
+    "SGRX": ["BTOG"]
 }
 
 user_input = st.text_area("Stock Watchlist (comma-separated):", default_tickers, height=150)
@@ -116,7 +115,7 @@ def calculate_stock_score(ticker_symbol):
         return 0, 0
 
 if st.button("Run Scanner", type="primary"):
-    results       = []
+    results         = []
     progress_bar  = st.progress(0)
     status_text   = st.empty()
     total_tickers = len(ticker_list)
@@ -126,9 +125,9 @@ if st.button("Run Scanner", type="primary"):
         score, candles_count = calculate_stock_score(symbol)
         status = "Active" if candles_count > 0 else "Data Unavailable"
         results.append({
-            "Ticker":          symbol,
+            "Ticker":           symbol,
             "30% Spike Score": score,
-            "Status":          status
+            "Status":           status
         })
         progress_bar.progress((idx + 1) / total_tickers)
 
