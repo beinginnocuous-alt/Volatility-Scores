@@ -24,9 +24,12 @@ default_tickers = (
     "APUS, SGRX, OLOX, TNMG, GIPR, CXAI, YYGH"
 )
 
-# Ticker Aliases to ensure full 1-year history for renamed stocks
+# Bidirectional Ticker Aliases to ensure full 1-year history for renamed stocks
 TICKER_ALIASES = {
-    "SGRX": ["BTOG"]
+    "SGRX": ["BTOG"],
+    "BTOG": ["SGRX"],
+    "YFOR": ["YYGH"],
+    "YYGH": ["YFOR"]
 }
 
 user_input = st.text_area("Stock Watchlist (comma-separated):", default_tickers, height=150)
@@ -145,18 +148,4 @@ if st.button("Run Scanner", type="primary"):
         }
     }
 
-    success = push_scores_to_gist(scores_dict)
-    if success:
-        st.success("✅ Scores pushed to website successfully!")
-    else:
-        st.error("❌ Failed to push scores to Gist — check your token and Gist ID in secrets.")
-
-    st.subheader("Results (Sorted by Highest Spikes)")
-    st.dataframe(df_results, use_container_width=True)
-
-    st.subheader("Top Performers")
-    top_3 = df_results[df_results["Status"] == "Active"].head(3)
-    cols  = st.columns(3)
-    for idx, (_, row) in enumerate(top_3.iterrows()):
-        with cols[idx]:
-            st.metric(label=row["Ticker"], value=f"{row['30% Spike Score']} Spikes")
+    success = push_scores_to_gist(scores
