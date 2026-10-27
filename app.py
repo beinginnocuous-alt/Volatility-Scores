@@ -1,17 +1,17 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import json
 import requests
-import time
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Stock Spike Scanner", layout="centered")
 
-st.title("📈 4-Hour Stock Spike Scanner (Alpha Vantage)")
-st.write("Calculates 30% rally spikes over the past 365 days using Alpha Vantage daily data.")
+st.title("📈 4-Hour Stock Spike Scanner")
+st.write("Calculates 30% rally spikes over the past 365 days (including extended hours trading).")
 
 default_tickers = (
-    "VIVK, NIVF, ELPW, ZNB, GCTK, CYCU, CHSN, ONCO, LRHC, IVF, ALP, SHPH, TRUG, "
+    "VIVK, NIVF, ELPW, ZNB, GCTK, CYCU, CHSN, ONCO, SRTM, IVF, ALP, SHPH, TRUG, "
     "IPW, CISS, CDT, RTB, CLIK, SOAR, UZX, ARTL, NUWE, WHLR, EZGO, NTCL, ALBT, "
     "VSME, CUPR, DRMA, UGRO, ZCMD, CTNT, GDC, TAOP, MASK, CIIT, PMAX, GCTS, "
     "LZMH, ADVB, KIDZ, PRFX, FGL, JYD, SLXN, LHSW, JTAI, GMEX, LNKS, RUBI, "
@@ -23,6 +23,16 @@ default_tickers = (
     "ONFO, GRML, OMH, JZXN, LHAI, YMT, FFAI, OFAL, HLSQ, UCAR, YYAI, "
     "APUS, SGRX, OLOX, TNMG, GIPR, CXAI, YYGH"
 )
+
+# Ticker Aliases for handling recent symbol changes or historical tracking links
+TICKER_ALIASES = {
+    "SGRX": ["BTOG"],
+    "BTOG": ["SGRX"],
+    "SRTM": ["LRHC"],
+    "LRHC": ["SRTM"],
+    "YFOR": ["YYGH"],
+    "YYGH": ["YFOR"]
+}
 
 user_input = st.text_area("Stock Watchlist (comma-separated):", default_tickers, height=150)
 ticker_list = [t.strip().upper() for t in user_input.split(",") if t.strip()]
@@ -48,41 +58,50 @@ def push_scores_to_gist(scores_dict):
     )
     return r.status_code == 200
 
-def fetch_alpha_vantage_score(ticker_symbol):
-    """Fetches historical daily data exclusively from Alpha Vantage."""
+def calculate_stock_score(ticker_symbol):
     try:
-        api_key = st.secrets.get("ALPHA_VANTAGE_KEY", "")
-        if not api_key:
+        end_date   = datetime.now()
+        start_date = end_date - timedelta(days=365)
+        
+        symbols_to_fetch = [ticker_symbol] + TICKER_ALIASES.get(ticker_symbol, [])
+        frames = []
+        
+        for sym in symbols_to_fetch:
+            try:
+                ticker = yf.Ticker(sym)
+                df_temp = ticker.history(start=start_date, end=end_date, interval="1h", prepost=True)
+                if not df_temp.empty:
+                    if isinstance(df_temp.columns, pd.MultiIndex):
+                        df_temp.columns = df_temp.columns.get_level_values(0)
+                    frames.append(df_temp)
+            except Exception:
+                continue
+                
+        if not frames:
             return 0, 0
 
-        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={ticker_symbol}&outputsize=full&apikey={api_key}"
-        res = requests.get(url)
-        data = res.json()
-
-        if "Time Series (Daily)" not in data:
-            return 0, 0
-
-        ts = data["Time Series (Daily)"]
-        df = pd.DataFrame.from_dict(ts, orient="index")
-        df.index = pd.to_datetime(df.index)
+        df = pd.concat(frames)
+        df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
 
-        cutoff = datetime.now() - timedelta(days=365)
-        df = df[df.index >= cutoff]
+        df_4h = df.resample('4h').agg({
+            'Open':   'first',
+            'High':   'max',
+            'Low':    'min',
+            'Close':  'last',
+            'Volume': 'sum'
+        }).dropna()
 
-        if df.empty:
+        if df_4h.empty:
             return 0, 0
 
-        df['High'] = pd.to_numeric(df['2. high'])
-        df['Low'] = pd.to_numeric(df['3. low'])
-
-        score = 0
+        score    = 0
         in_spike = False
-        current_low = df['Low'].iloc[0]
+        current_low = df_4h['Low'].iloc[0]
 
-        for i in range(len(df)):
-            candle_high = df['High'].iloc[i]
-            candle_low  = df['Low'].iloc[i]
+        for i in range(len(df_4h)):
+            candle_high = df_4h['High'].iloc[i]
+            candle_low  = df_4h['Low'].iloc[i]
 
             if candle_low < current_low and not in_spike:
                 current_low = candle_low
@@ -90,13 +109,13 @@ def fetch_alpha_vantage_score(ticker_symbol):
             gain = (candle_high - current_low) / current_low if current_low > 0 else 0
 
             if gain >= 0.30 and not in_spike:
-                score += 1
+                score   += 1
                 in_spike = True
             elif gain < 0.30 and in_spike:
-                in_spike = False
+                in_spike    = False
                 current_low = candle_low
 
-        return score, len(df)
+        return score, len(df_4h)
     except Exception:
         return 0, 0
 
@@ -107,8 +126,8 @@ if st.button("Run Scanner", type="primary"):
     total_tickers = len(ticker_list)
 
     for idx, symbol in enumerate(ticker_list):
-        status_text.text(f"Scanning ({idx+1}/{total_tickers}): {symbol} (Alpha Vantage)...")
-        score, candles_count = fetch_alpha_vantage_score(symbol)
+        status_text.text(f"Scanning ({idx+1}/{total_tickers}): {symbol}")
+        score, candles_count = calculate_stock_score(symbol)
         
         status = "Active" if candles_count > 0 else "Data Unavailable"
         results.append({
@@ -117,10 +136,6 @@ if st.button("Run Scanner", type="primary"):
             "Status": status
         })
         progress_bar.progress((idx + 1) / total_tickers)
-        
-        # Pause for 12 seconds between requests to respect Alpha Vantage's 5 requests/minute free limit
-        if idx < total_tickers - 1:
-            time.sleep(12)
 
     status_text.text("Scan complete! Pushing scores to website...")
 
