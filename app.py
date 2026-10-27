@@ -1,14 +1,14 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import json
 import requests
+import time
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Stock Spike Scanner", layout="centered")
 
-st.title("📈 4-Hour Stock Spike Scanner")
-st.write("Calculates 30% rally spikes over the past 365 days (including extended hours trading).")
+st.title("📈 4-Hour Stock Spike Scanner (Alpha Vantage)")
+st.write("Calculates 30% rally spikes over the past 365 days using Alpha Vantage daily data.")
 
 default_tickers = (
     "VIVK, NIVF, ELPW, ZNB, GCTK, CYCU, CHSN, ONCO, LRHC, IVF, ALP, SHPH, TRUG, "
@@ -23,14 +23,6 @@ default_tickers = (
     "ONFO, GRML, OMH, JZXN, LHAI, YMT, FFAI, OFAL, HLSQ, UCAR, YYAI, "
     "APUS, SGRX, OLOX, TNMG, GIPR, CXAI, YYGH"
 )
-
-# Ticker Aliases for normal stocks where history is linked
-TICKER_ALIASES = {
-    "SGRX": ["BTOG"],
-    "BTOG": ["SGRX"],
-    "YFOR": ["YYGH"],
-    "YYGH": ["YFOR"]
-}
 
 user_input = st.text_area("Stock Watchlist (comma-separated):", default_tickers, height=150)
 ticker_list = [t.strip().upper() for t in user_input.split(",") if t.strip()]
@@ -57,7 +49,7 @@ def push_scores_to_gist(scores_dict):
     return r.status_code == 200
 
 def fetch_alpha_vantage_score(ticker_symbol):
-    """Fallback fetcher using Alpha Vantage when Yahoo Finance lacks history."""
+    """Fetches historical daily data exclusively from Alpha Vantage."""
     try:
         api_key = st.secrets.get("ALPHA_VANTAGE_KEY", "")
         if not api_key:
@@ -108,84 +100,27 @@ def fetch_alpha_vantage_score(ticker_symbol):
     except Exception:
         return 0, 0
 
-def calculate_stock_score(ticker_symbol):
-    """Primary fetcher using Yahoo Finance with automatic Alpha Vantage fallback."""
-    try:
-        end_date   = datetime.now()
-        start_date = end_date - timedelta(days=365)
-        
-        symbols_to_fetch = [ticker_symbol] + TICKER_ALIASES.get(ticker_symbol, [])
-        frames = []
-        
-        for sym in symbols_to_fetch:
-            try:
-                ticker = yf.Ticker(sym)
-                df_temp = ticker.history(start=start_date, end=end_date, interval="1h", prepost=True)
-                if not df_temp.empty:
-                    if isinstance(df_temp.columns, pd.MultiIndex):
-                        df_temp.columns = df_temp.columns.get_level_values(0)
-                    frames.append(df_temp)
-            except Exception:
-                continue
-                
-        if not frames:
-            return fetch_alpha_vantage_score(ticker_symbol)
-
-        df = pd.concat(frames)
-        df = df[~df.index.duplicated(keep="last")]
-        df.sort_index(inplace=True)
-
-        df_4h = df.resample('4h').agg({
-            'Open':   'first',
-            'High':   'max',
-            'Low':    'min',
-            'Close':  'last',
-            'Volume': 'sum'
-        }).dropna()
-
-        if df_4h.empty:
-            return fetch_alpha_vantage_score(ticker_symbol)
-
-        score    = 0
-        in_spike = False
-        current_low = df_4h['Low'].iloc[0]
-
-        for i in range(len(df_4h)):
-            candle_high = df_4h['High'].iloc[i]
-            candle_low  = df_4h['Low'].iloc[i]
-
-            if candle_low < current_low and not in_spike:
-                current_low = candle_low
-
-            gain = (candle_high - current_low) / current_low if current_low > 0 else 0
-
-            if gain >= 0.30 and not in_spike:
-                score   += 1
-                in_spike = True
-            elif gain < 0.30 and in_spike:
-                in_spike    = False
-                current_low = candle_low
-
-        return score, len(df_4h)
-    except Exception:
-        return fetch_alpha_vantage_score(ticker_symbol)
-
 if st.button("Run Scanner", type="primary"):
-    results         = []
-    progress_bar  = st.progress(0)
-    status_text   = st.empty()
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     total_tickers = len(ticker_list)
 
     for idx, symbol in enumerate(ticker_list):
-        status_text.text(f"Scanning ({idx+1}/{total_tickers}): {symbol}")
-        score, candles_count = calculate_stock_score(symbol)
+        status_text.text(f"Scanning ({idx+1}/{total_tickers}): {symbol} (Alpha Vantage)...")
+        score, candles_count = fetch_alpha_vantage_score(symbol)
+        
         status = "Active" if candles_count > 0 else "Data Unavailable"
         results.append({
-            "Ticker":           symbol,
+            "Ticker": symbol,
             "30% Spike Score": score,
-            "Status":           status
+            "Status": status
         })
         progress_bar.progress((idx + 1) / total_tickers)
+        
+        # Pause for 12 seconds between requests to respect Alpha Vantage's 5 requests/minute free limit
+        if idx < total_tickers - 1:
+            time.sleep(12)
 
     status_text.text("Scan complete! Pushing scores to website...")
 
@@ -212,7 +147,7 @@ if st.button("Run Scanner", type="primary"):
 
     st.subheader("Top Performers")
     top_3_df = df_results[df_results["Status"] == "Active"].head(3)
-    cols  = st.columns(3)
+    cols = st.columns(3)
     for idx, (_, row) in enumerate(top_3_df.iterrows()):
         with cols[idx]:
             st.metric(label=row["Ticker"], value=f"{row['30% Spike Score']} Spikes")
