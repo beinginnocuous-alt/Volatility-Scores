@@ -24,7 +24,7 @@ default_tickers = (
     "APUS, SGRX, OLOX, TNMG, GIPR, CXAI, YYGH"
 )
 
-# Bidirectional Ticker Aliases
+# Ticker Aliases for normal stocks where history is linked
 TICKER_ALIASES = {
     "SGRX": ["BTOG"],
     "BTOG": ["SGRX"],
@@ -56,7 +56,60 @@ def push_scores_to_gist(scores_dict):
     )
     return r.status_code == 200
 
+def fetch_alpha_vantage_score(ticker_symbol):
+    """Fallback fetcher using Alpha Vantage when Yahoo Finance lacks history."""
+    try:
+        api_key = st.secrets.get("ALPHA_VANTAGE_KEY", "")
+        if not api_key:
+            return 0, 0
+
+        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={ticker_symbol}&outputsize=full&apikey={api_key}"
+        res = requests.get(url)
+        data = res.json()
+
+        if "Time Series (Daily)" not in data:
+            return 0, 0
+
+        ts = data["Time Series (Daily)"]
+        df = pd.DataFrame.from_dict(ts, orient="index")
+        df.index = pd.to_datetime(df.index)
+        df.sort_index(inplace=True)
+
+        cutoff = datetime.now() - timedelta(days=365)
+        df = df[df.index >= cutoff]
+
+        if df.empty:
+            return 0, 0
+
+        df['High'] = pd.to_numeric(df['2. high'])
+        df['Low'] = pd.to_numeric(df['3. low'])
+
+        score = 0
+        in_spike = False
+        current_low = df['Low'].iloc[0]
+
+        for i in range(len(df)):
+            candle_high = df['High'].iloc[i]
+            candle_low  = df['Low'].iloc[i]
+
+            if candle_low < current_low and not in_spike:
+                current_low = candle_low
+
+            gain = (candle_high - current_low) / current_low if current_low > 0 else 0
+
+            if gain >= 0.30 and not in_spike:
+                score += 1
+                in_spike = True
+            elif gain < 0.30 and in_spike:
+                in_spike = False
+                current_low = candle_low
+
+        return score, len(df)
+    except Exception:
+        return 0, 0
+
 def calculate_stock_score(ticker_symbol):
+    """Primary fetcher using Yahoo Finance with automatic Alpha Vantage fallback."""
     try:
         end_date   = datetime.now()
         start_date = end_date - timedelta(days=365)
@@ -71,37 +124,14 @@ def calculate_stock_score(ticker_symbol):
                 if not df_temp.empty:
                     if isinstance(df_temp.columns, pd.MultiIndex):
                         df_temp.columns = df_temp.columns.get_level_values(0)
-                    frames.append((sym, df_temp))
+                    frames.append(df_temp)
             except Exception:
                 continue
                 
         if not frames:
-            return 0, 0
+            return fetch_alpha_vantage_score(ticker_symbol)
 
-        # Sort frames chronologically based on their data timestamps to normalize price scaling across symbol changes
-        frames.sort(key=lambda x: x[1].index[0])
-        
-        normalized_frames = []
-        last_close_bridge = None
-
-        for sym, df_f in frames:
-            if last_close_bridge is not None and not df_f.empty:
-                # Calculate adjustment ratio at the boundary to align split/scale differences
-                first_price_new = df_f['Close'].iloc[0]
-                if first_price_new > 0:
-                    scaling_factor = last_close_bridge / first_price_new
-                    for col in ['Open', 'High', 'Low', 'Close']:
-                        if col in df_f.columns:
-                            df_f[col] = df_f[col] * scaling_factor
-            
-            if not df_f.empty:
-                last_close_bridge = df_f['Close'].iloc[-1]
-                normalized_frames.append(df_f)
-
-        if not normalized_frames:
-            return 0, 0
-
-        df = pd.concat(normalized_frames)
+        df = pd.concat(frames)
         df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
 
@@ -114,7 +144,7 @@ def calculate_stock_score(ticker_symbol):
         }).dropna()
 
         if df_4h.empty:
-            return 0, 0
+            return fetch_alpha_vantage_score(ticker_symbol)
 
         score    = 0
         in_spike = False
@@ -138,7 +168,7 @@ def calculate_stock_score(ticker_symbol):
 
         return score, len(df_4h)
     except Exception:
-        return 0, 0
+        return fetch_alpha_vantage_score(ticker_symbol)
 
 if st.button("Run Scanner", type="primary"):
     results         = []
@@ -153,8 +183,7 @@ if st.button("Run Scanner", type="primary"):
         results.append({
             "Ticker":           symbol,
             "30% Spike Score": score,
-            "Status":           status,
-            "Candles":          candles_count
+            "Status":           status
         })
         progress_bar.progress((idx + 1) / total_tickers)
 
@@ -182,8 +211,8 @@ if st.button("Run Scanner", type="primary"):
     st.dataframe(df_results, use_container_width=True)
 
     st.subheader("Top Performers")
-    top_3 = df_results[df_results["Status"] == "Active"].head(3)
+    top_3_df = df_results[df_results["Status"] == "Active"].head(3)
     cols  = st.columns(3)
-    for idx, (_, row) in enumerate(top_3.iterrows()):
+    for idx, (_, row) in enumerate(top_3_df.iterrows()):
         with cols[idx]:
             st.metric(label=row["Ticker"], value=f"{row['30% Spike Score']} Spikes")
